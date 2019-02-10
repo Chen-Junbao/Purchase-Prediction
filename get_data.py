@@ -4,25 +4,31 @@ from keras.preprocessing.sequence import pad_sequences
 
 
 class Data:
-	time_step = 0  # 时间步
+	time_step_1 = 0  # LSTM1的时间步
+	time_step_2 = 0  # LSTM2的时间步
 	sku_all_num = 0  # 所有商品数量
 
-	def __init__(self, time_step):
-		self.time_step = time_step
+	def __init__(self, time_step_1, time_step_2):
+		self.time_step_1 = time_step_1
+		self.time_step_2 = time_step_2
 
 	@staticmethod
 	def read_data(path):
-		""" 根据清洗后的csv文件路径获取DataFrame
+		""" 根据清洗后的浏览记录csv文件路径获取DataFrame
 
-		读取清洗后的csv文件，并删除重复行。之后选取含有浏览记录以及购买记录的数据，返回对应的DataFrame。
+		读取清洗后的csv文件，并删除重复行。之后选取含有浏览记录，加购记录以及购买记录的数据，返回对应的DataFrame。
 		:param path: 清洗后的csv文件路径
 		:return: 对应数据的DataFrame
 		"""
 		df = pd.read_csv(path).drop_duplicates()
-		df = df[(df['type'] == 4) | (df['type'] == 1)]
-		df.sort_values(['user_id', 'time'], inplace=True)
 
-		return df
+		df_browse = df[(df['type'] == 4) | (df['type'] == 1)]
+		df_browse = df_browse.sort_values(['user_id', 'time'])
+
+		df_cart = df[(df['type'] == 4) | (df['type'] == 2)]
+		df_cart = df_cart.sort_values(['user_id', 'time'])
+
+		return df_browse, df_cart
 
 	@staticmethod
 	def generate_data_set(df, sku_all):
@@ -47,12 +53,36 @@ class Data:
 					sample.append(np.array(sku_list[start: i]))
 
 					temp = np.zeros(len(sku_all))
-					temp[sku_all.index(sku_list[i])] = 1
+					index = sku_all.index(sku_list[i])
+					temp[index] = 1
 					label.append(temp)
 
 					start = i + 1
 
 		return np.array(sample), np.array(label)
+
+	@staticmethod
+	def generate_age_set(df):
+		""" 根据对应的DataFrame生成相应的样本及标签。
+
+		将用户的浏览记录作为样本，浏览之后的购买商品ID作为标签。标签为1的下标在sku_all列表中对应的商品ID为购买的商品ID。即若label[2]=1，则购买的商品ID为sku_all[2]
+		:param df: 给定的DataFrame
+		:return: 样本及标签数组
+		"""
+		groups = df.groupby('user_id')
+
+		sample = []
+
+		for group in groups:
+			type_list = list(group[1]['type'])
+			for i in range(len(type_list)):
+				if type_list[i] == 4:
+					sample.append(group[1]['age'].iloc[0])
+
+		sample = np.array(sample)
+		sample = np.reshape(sample, (-1, 1))
+
+		return sample
 
 	@staticmethod
 	def fit_sample(sample, time_step):
@@ -75,26 +105,37 @@ class Data:
 		:return: 训练样本，训练标签，测试样本，测试标签
 		"""
 		# 读取清洗后的csv文件
-		df_train = self.read_data('train.csv')
-		df_test = self.read_data('test.csv')
+		df_browse_train, df_cart_train = self.read_data('train.csv')
+		df_browse_test, df_cart_test = self.read_data('test.csv')
 
 		# 训练集和测试集所包含的所有商品ID
-		sku_all = list(set(df_train['sku_id']).union(set(df_test['sku_id'])))
+		sku_all = list(set(df_browse_train['sku_id']).union(set(df_browse_test['sku_id'])))
 		self.sku_all_num = len(sku_all)
 
 		# 为训练集和测试集生成对应的样本及标签
-		x_train, y_train = self.generate_data_set(df_train, sku_all)
-		x_test, y_test = self.generate_data_set(df_test, sku_all)
+		x_train_browse, y_train = self.generate_data_set(df_browse_train, sku_all)
+		x_train_cart, _ = self.generate_data_set(df_cart_train, sku_all)
+		x_test_browse, y_test = self.generate_data_set(df_browse_test, sku_all)
+		x_test_cart, _ = self.generate_data_set(df_cart_test, sku_all)
 
 		# 对样本集进行处理
-		x_train = self.fit_sample(x_train, self.time_step)
-		x_test = self.fit_sample(x_test, self.time_step)
+		x_train_browse = self.fit_sample(x_train_browse, self.time_step_1)
+		x_test_browse = self.fit_sample(x_test_browse, self.time_step_1)
+		x_train_cart = self.fit_sample(x_train_cart, self.time_step_2)
+		x_test_cart = self.fit_sample(x_test_cart, self.time_step_2)
 
 		# 对小于time_step的样本进行扩充
-		x_train = pad_sequences(sequences=x_train, maxlen=self.time_step, padding='pre')
-		x_test = pad_sequences(sequences=x_test, maxlen=self.time_step, padding='pre')
+		x_train_browse = pad_sequences(sequences=x_train_browse, maxlen=self.time_step_1, padding='pre')
+		x_test_browse = pad_sequences(sequences=x_test_browse, maxlen=self.time_step_1, padding='pre')
+		x_train_cart = pad_sequences(sequences=x_train_cart, maxlen=self.time_step_2, padding='pre')
+		x_test_cart = pad_sequences(sequences=x_test_cart, maxlen=self.time_step_2, padding='pre')
 
-		x_train = x_train.reshape((x_train.shape[0], x_train.shape[1], 1))
-		x_test = x_test.reshape((x_test.shape[0], x_test.shape[1], 1))
+		x_train_browse = x_train_browse.reshape((x_train_browse.shape[0], x_train_browse.shape[1], 1))
+		x_test_browse = x_test_browse.reshape((x_test_browse.shape[0], x_test_browse.shape[1], 1))
+		x_train_cart = x_train_cart.reshape((x_train_cart.shape[0], x_train_cart.shape[1], 1))
+		x_test_cart = x_test_cart.reshape((x_test_cart.shape[0], x_test_cart.shape[1], 1))
 
-		return x_train, y_train, x_test, y_test
+		age_train = self.generate_age_set(df_browse_train)
+		age_test = self.generate_age_set(df_browse_test)
+
+		return x_train_browse, x_train_cart, y_train, x_test_browse, x_test_cart, y_test, age_train, age_test
